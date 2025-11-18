@@ -118,6 +118,7 @@ def unauthorized():
 # --- Google OAuth Setup ---
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+BACKEND_URL = os.environ.get('BACKEND_URL', 'http://localhost:5000')
 
 if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
     print("Error: Google Client ID or Secret not found.")
@@ -129,7 +130,7 @@ else:
             "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            # "redirect_uris": ["http://localhost:5000/callback/google"],
+            "redirect_uris": [f"{BACKEND_URL}/callback/google"],
             "javascript_origins": [FRONTEND_URL]
         }
     }
@@ -160,6 +161,7 @@ def google_login():
 def google_callback():
     if not client_secrets:
         print("Error: Server configuration error: Google credentials missing during callback.")
+        
         return redirect(f'{FRONTEND_URL}/login?error=server_config')
     
     state = session.get('state')

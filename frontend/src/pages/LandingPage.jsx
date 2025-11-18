@@ -1,4 +1,5 @@
-import { useNavigate } from 'react-router-dom';
+// import { useNavigate } from 'react-router-dom';
+import { Link } from "react-router-dom";
 
 export default function LandingPage() {
   return (
@@ -30,12 +31,11 @@ export default function LandingPage() {
                   The Only Problem is You
                 </p>
                 <div className="mt-10 flex items-center justify-center gap-x-6">
-                  <a
+                  <Link to="/login"
                     className="rounded-full bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                    href="/login"
                   >
                     Get Started
-                  </a>
+                  </Link>
                 </div>
               </div>
             </div>
