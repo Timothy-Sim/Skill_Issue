@@ -4,12 +4,17 @@ set -o errexit
 
 pip install -r requirements.txt
 
-echo "Downloading Stockfish..."
-curl -L -o stockfish.zip https://stockfishchess.org/files/stockfish_16_linux_x64_avx2.zip
+echo "Downloading Stockfish 17.1..."
+curl -L -o stockfish.tar https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar
 
-unzip stockfish.zip
-mv stockfish-ubuntu-x86-64-avx2/stockfish-ubuntu-x86-64-avx2 ./stockfish
-rm stockfish.zip
+echo "Extracting Stockfish..."
+tar -xf stockfish.tar
+
+echo "Moving executable..."
+find . -type f -name 'stockfish-ubuntu-x86-64-avx2' -exec mv {} ./stockfish \;
+
+rm stockfish.tar
 rm -rf stockfish-ubuntu-x86-64-avx2
+
 chmod +x ./stockfish
 echo "Stockfish binary is ready."

@@ -1,7 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
-import DashboardPage from './pages/DashBoardPage'
+import DashboardPage from './pages/DashboardPage'
 
 export default function App() {
   return (
