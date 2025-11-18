@@ -139,7 +139,7 @@ export default function DashboardPage() {
             Welcome, {userInfo?.name || 'User'}!
           </h1>
           <a
-            href={`${API}\logout`}
+            href={`${API}/logout`}
             className="px-4 py-2 bg-red-600 text-white font-semibold rounded-md shadow-sm hover:bg-red-500"
           >
             Logout
