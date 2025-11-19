@@ -55,6 +55,8 @@ def get_engine():
     if 'engine' not in g:
         try:
             g.engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+            # Limit memory usage for Render backend Free tier
+            g.engine.configure({"Threads": 1, "Hash": 16})
         except Exception as e:
             print(f"Error starting Stockfish engine: {e}")
             raise
