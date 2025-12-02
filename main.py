@@ -74,6 +74,7 @@ def close_connections(error):
         engine.quit()
 
 # --- User Class (to work with Flask-Login) ---
+# Most things LOGIN related are generated and debugged by Gemini
 class User(UserMixin):
     def __init__(self, id, google_id, email, name, chess_com_username, created_at):
         self.id = id
@@ -299,7 +300,7 @@ def logout():
     logout_user()
     print("User logged out.")
     return redirect(FRONTEND_URL)
-
+# End Gemini
 
 # --- *** NEW ANALYZE ENDPOINT *** ---
 @app.route("/api/analyze", methods=['POST'])
@@ -308,7 +309,6 @@ def analyze_games():
     if not matches or not analysis:
         return jsonify({"error": "Analysis modules not loaded"}), 500
 
-    # 1. Get user info from the session
     chess_username = current_user.chess_com_username
     user_id = current_user.id
     

@@ -1,11 +1,11 @@
 import psycopg2
-from psycopg2.extras import execute_values, RealDictCursor # Added RealDictCursor
+from psycopg2.extras import execute_values, RealDictCursor
 from datetime import datetime
+import json
+
+# --- FUNCTIONS FOR matches.py (Ingestion) ---
 
 def get_user_by_username(cur, username):
-    """
-    Fetches a user's ID from the database using their chess.com username.
-    """
     try:
         cur.execute("SELECT id FROM users WHERE chess_com_username = %s", (username,))
         user_row = cur.fetchone()
@@ -19,11 +19,6 @@ def get_user_by_username(cur, username):
         return None
 
 def insert_game(cur, user_id, source, source_game_id, game_url, pgn_data, game_date):
-    """
-    Inserts a single game into the 'games' table.
-    Handles conflicts if the game already exists.
-    Returns the new game_id or None if it already existed.
-    """
     insert_game_sql = """
     INSERT INTO games (user_id, source, source_game_id, game_url, pgn_data, game_date)
     VALUES (%s, %s, %s, %s, %s, %s)
@@ -41,51 +36,25 @@ def insert_game(cur, user_id, source, source_game_id, game_url, pgn_data, game_d
         else:
             print(f"Game {source_game_id} already exists in DB. Skipping.")
             return None
-            
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error inserting game: {error}")
         return None
 
 def batch_insert_mistakes(cur, mistakes_list_of_dicts):
-    """
-    Efficiently inserts a list of mistake dictionaries into the 'mistakes' table.
-    This function is now updated for the FULL schema.
-    """
     if not mistakes_list_of_dicts:
         print("No mistakes to insert.")
         return
 
-    # *** IMPORTANT ***
-    # This list MUST match the order of columns in your 'mistakes' table
-    # AND the keys in the 'mistake_data' dictionary from matches.py
     columns = [
-        'game_id',
-        # Core Move Info
-        'move_number', 'player_color', 'prior_fen', 'move_made', 'best_move',
-        # Stockfish Analysis
-        'cpl', 'mistake_type', 'mistake_category',
-        # Feature Vector
-        'game_phase', 'material_balance', 'board_complexity',
-        # King Safety Context
-        'king_self_safety', 'king_opponent_status', 'castling_status_self',
-        # Move/Piece Context
-        'piece_moved', 'move_type',
-        # Tactical Context
-        'piece_was_attacked', 'piece_was_defended', 'piece_was_defending', 'piece_was_pinned'
+        'game_id', 'move_number', 'player_color', 'prior_fen', 'move_made', 'best_move',
+        'cpl', 'mistake_type', 'mistake_category', 'game_phase', 'material_balance', 
+        'board_complexity', 'king_self_safety', 'king_opponent_status', 
+        'castling_status_self', 'piece_moved', 'move_type', 'piece_was_attacked', 
+        'piece_was_defended', 'piece_was_defending', 'piece_was_pinned'
     ]
     
-    # Create a list of tuples from the list of dictionaries
-    # This ensures the data is in the correct order for execute_values
-    values_list = []
-    for mistake in mistakes_list_of_dicts:
-        # Use .get(col) to safely retrieve values (it returns None if key is missing)
-        values_list.append(tuple(mistake.get(col) for col in columns))
-
-    # Create the SQL query
-    insert_mistakes_sql = f"""
-    INSERT INTO mistakes ({', '.join(columns)}) 
-    VALUES %s;
-    """
+    values_list = [tuple(mistake.get(col) for col in columns) for mistake in mistakes_list_of_dicts]
+    insert_mistakes_sql = f"INSERT INTO mistakes ({', '.join(columns)}) VALUES %s;"
     
     try:
         execute_values(cur, insert_mistakes_sql, values_list)
@@ -93,70 +62,68 @@ def batch_insert_mistakes(cur, mistakes_list_of_dicts):
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error batch-inserting mistakes: {error}")
 
-def get_all_mistakes_for_user(cur, user_id):
+# --- FUNCTIONS FOR analysis.py (v9 Pipeline) ---
+
+def clear_old_habits_and_feedback(cur, user_id):
     """
-    Fetches the full feature vector for every mistake a user has made.
-    Uses RealDictCursor to return a list of dictionaries.
+    Deletes all existing habits and feedback for a user before
+    re-analyzing them. Also unlinks all mistakes.
     """
-    # These are all the columns we'll use for clustering
-    feature_columns = [
-        'id', # We need the mistake ID to link it back to the habit
-        'mistake_type', 'mistake_category', 'game_phase', 'material_balance', 
-        'board_complexity', 'king_self_safety', 'king_opponent_status', 
-        'castling_status_self', 'piece_moved', 'move_type', 'piece_was_attacked', 
-        'piece_was_defended', 'piece_was_defending', 'piece_was_pinned'
-    ]
-    
-    # Select only mistakes that haven't been assigned a habit yet
-    select_sql = f"""
-    SELECT {', '.join(feature_columns)} 
-    FROM mistakes 
-    WHERE game_id IN (SELECT id FROM games WHERE user_id = %s)
-    AND habit_id IS NULL; 
-    """
-    
     try:
-        # We use a RealDictCursor to get back dicts instead of tuples
-        with cur.connection.cursor(cursor_factory=RealDictCursor) as dict_cur:
-            dict_cur.execute(select_sql, (user_id,))
-            mistakes = dict_cur.fetchall()
+        print(f"Clearing old analysis data for user {user_id}...")
         
-        print(f"Fetched {len(mistakes)} new mistakes for user {user_id}.")
-        return mistakes
+        # 1. Unlink all mistakes from habits
+        cur.execute(
+            """
+            UPDATE mistakes SET habit_id = NULL 
+            WHERE game_id IN (SELECT id FROM games WHERE user_id = %s)
+            """, 
+            (user_id,)
+        )
         
+        # 2. Deleting from 'habits' will CASCADE and delete from 'feedback'
+        cur.execute("DELETE FROM habits WHERE user_id = %s", (user_id,))
+        print("Old analysis cleared.")
     except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error fetching mistakes for user: {error}")
+        print(f"Error clearing old habits: {error}")
+        raise # Raise the error to stop the transaction
+
+def get_all_mistakes_for_user_v6(cur, user_id):
+    """
+    Fetches ALL mistakes for a user, regardless of habit_id.
+    This is the main dataset for HDBSCAN.
+    """
+    sql = """
+    SELECT 
+        id, cpl, move_number, -- Numeric features
+        mistake_type, mistake_category, game_phase, material_balance, -- Categorical features
+        board_complexity, king_self_safety, king_opponent_status, 
+        castling_status_self, piece_moved, move_type, piece_was_attacked, 
+        piece_was_defended, piece_was_defending, piece_was_pinned
+    FROM mistakes
+    WHERE game_id IN (SELECT id FROM games WHERE user_id = %s);
+    """
+    try:
+        with cur.connection.cursor(cursor_factory=RealDictCursor) as dict_cur:
+            dict_cur.execute(sql, (user_id,))
+            mistakes = dict_cur.fetchall()
+        print(f"Fetched {len(mistakes)} total mistakes for user {user_id} for clustering.")
+        return [dict(row) for row in mistakes]
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error fetching all mistakes: {error}")
         return []
 
-def create_habit_entry(cur, user_id, habit_name, description=""):
-    """
-    Creates a new row in the 'habits' table for a user.
-    Returns the new habit's ID.
-    """
-    insert_sql = """
-    INSERT INTO habits (user_id, habit_name, description)
-    VALUES (%s, %s, %s)
-    RETURNING id;
-    """
-    try:
-        cur.execute(insert_sql, (user_id, habit_name, description))
-        habit_id = cur.fetchone()[0]
-        return habit_id
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error creating habit entry: {error}")
-        return None
-
-def link_mistakes_to_habit(cur, habit_id, list_of_mistake_ids):
+def link_mistakes_to_habit(cur, new_serial_habit_id, list_of_mistake_ids):
     """
     Updates the 'habit_id' for a list of mistakes.
+    This is called *after* a new habit is created.
     """
     if not list_of_mistake_ids:
         print("No mistake IDs to link.")
         return
 
-    # We use execute_values for an efficient UPDATE
-    # It requires a list of tuples, so we format it as (habit_id, mistake_id)
-    data_to_update = [(habit_id, mistake_id) for mistake_id in list_of_mistake_ids]
+    # Create a list of tuples: (new_serial_habit_id, mistake_id)
+    data_to_update = [(new_serial_habit_id, mistake_id) for mistake_id in list_of_mistake_ids]
 
     update_sql = """
     UPDATE mistakes AS m
@@ -167,37 +134,38 @@ def link_mistakes_to_habit(cur, habit_id, list_of_mistake_ids):
     
     try:
         execute_values(cur, update_sql, data_to_update)
-        print(f"Linked {len(list_of_mistake_ids)} mistakes to habit {habit_id}.")
+        print(f"Linked {len(list_of_mistake_ids)} mistakes to new habit_id {new_serial_habit_id}.")
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error linking mistakes to habit: {error}")
+        # This will rollback the transaction in main_analysis_pipeline
 
-def get_mistakes_by_habit_id(cur, habit_id):
+def save_habit_analysis(cur, user_id, hdbscan_cluster_id, habit_name, triggers, confidence, prime_example_id, feedback_text):
     """
-    Fetches all feature vectors for mistakes associated with a specific habit_id.
+    Saves the results of the analysis to the 'habits' and 'feedback' tables.
+    Returns the new 'habit' table ID (the serial key).
     """
-    # Define the features we care about for rule mining
-    feature_columns = [
-        'mistake_type', 'mistake_category', 'game_phase', 'material_balance', 
-        'board_complexity', 'king_self_safety', 'king_opponent_status', 
-        'castling_status_self', 'piece_moved', 'move_type', 'piece_was_attacked', 
-        'piece_was_defended', 'piece_was_defending', 'piece_was_pinned'
-    ]
-    
-    select_sql = f"""
-    SELECT {', '.join(feature_columns)} 
-    FROM mistakes 
-    WHERE habit_id = %s;
-    """
-    
     try:
-        # We use a RealDictCursor to get back dicts instead of tuples
-        with cur.connection.cursor(cursor_factory=RealDictCursor) as dict_cur:
-            dict_cur.execute(select_sql, (habit_id,))
-            mistakes = dict_cur.fetchall()
+        # --- 1. Save to 'habits' table ---
+        habit_sql = """
+        INSERT INTO habits (user_id, habit_name, description)
+        VALUES (%s, %s, %s)
+        RETURNING id;
+        """
+        description = f"HDBSCAN Cluster {hdbscan_cluster_id} ({confidence * 100:.0f}% confidence)"
+        cur.execute(habit_sql, (user_id, habit_name, description))
+        new_serial_habit_id = cur.fetchone()[0]
+
+        # --- 2. Save to 'feedback' table ---
+        feedback_sql = """
+        INSERT INTO feedback (habit_id, feedback_text, triggers_json, prime_example_mistake_id)
+        VALUES (%s, %s, %s, %s)
+        """
+        triggers_json = json.dumps(triggers)
+        cur.execute(feedback_sql, (new_serial_habit_id, feedback_text, triggers_json, prime_example_id))
         
-        print(f"Fetched {len(mistakes)} mistakes for habit {habit_id}.")
-        return mistakes
+        print(f"Saved analysis for new habit {new_serial_habit_id} (Cluster {hdbscan_cluster_id}).")
+        return new_serial_habit_id # Return the *database* ID
         
     except (Exception, psycopg2.DatabaseError) as error:
-        print(f"Error fetching mistakes for habit: {error}")
-        return []
+        print(f"Error saving habit analysis: {error}")
+        return None

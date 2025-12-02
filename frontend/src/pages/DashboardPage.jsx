@@ -1,9 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Sidebar from './Sidebar'
 
 const API_URL = import.meta.env.REACT_APP_API_URL || import.meta.env.VITE_REACT_APP_API_URL;
 
 const API = API_URL ? `${API_URL}` : "http://localhost:5000"; 
+
+// Helper function to format month and year (e.g., "2023-01")
+const getMonthYearString = (date) => {
+    const year = date.getFullYear();
+    // Months are 0-indexed, so we add 1 and pad with '0'
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+};
+
+// Helper function to get the current and previous 12 month-year strings
+const getMonthYearOptions = (count = 24) => {
+    const options = [];
+    let date = new Date(); // Start with the current date (for the latest month)
+    
+    // Set the date to the first day of the current month to ensure consistency
+    date.setDate(1); 
+    
+    for (let i = 0; i < count; i++) {
+        options.push(getMonthYearString(date));
+        // Move back one month
+        date.setMonth(date.getMonth() - 1);
+    }
+    return options.reverse(); // Reverse to show oldest first
+};
+
+const monthYearOptions = getMonthYearOptions();
 
 
 export default function DashboardPage() {
@@ -15,6 +42,10 @@ export default function DashboardPage() {
   // State for the "Link Account" form
   const [linkUsername, setLinkUsername] = useState('');
   const [linkMessage, setLinkMessage] = useState('');
+
+  // ⭐️ NEW: State for the date range
+  const [startMonthYear, setStartMonthYear] = useState(monthYearOptions[monthYearOptions.length - 6] || ''); // Default to 6 months ago
+  const [endMonthYear, setEndMonthYear] = useState(monthYearOptions[monthYearOptions.length - 1] || '');   // Default to the most recent month
 
   // State for analysis
   const [analysisResults, setAnalysisResults] = useState(null);
@@ -56,7 +87,7 @@ export default function DashboardPage() {
     fetchUserStatus();
   }, [navigate]); // Add navigate as a dependency
 
-  // Handler for the "Link Account" form
+  // Handler for the "Link Account" form (no change needed here)
   const handleLinkAccount = async (e) => {
     e.preventDefault();
     setLinkMessage(''); // Clear previous messages
@@ -93,6 +124,12 @@ export default function DashboardPage() {
 
   // Handler for the "Analyze" button
   const handleAnalyze = async () => {
+    // ⭐️ NEW: Date validation
+    if (startMonthYear > endMonthYear) {
+        setError('Start date cannot be after the end date.');
+        return;
+    }
+
     setAnalysisResults(null);
     setAnalysisLoading(true);
     setError('');
@@ -101,7 +138,14 @@ export default function DashboardPage() {
       const response = await fetch(`${API}/api/analyze`, {
         method: 'POST',
         credentials: 'include', // Send cookies
-        // No body is needed, backend uses the logged-in user's linked account
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        // ⭐️ NEW: Send the date range in the request body
+        body: JSON.stringify({ 
+            start_month_year: startMonthYear, 
+            end_month_year: endMonthYear 
+        }),
       });
       
       const data = await response.json();
@@ -125,27 +169,21 @@ export default function DashboardPage() {
   
   // Show this if user is somehow not logged in
   if (!isLoggedIn) {
-     // This shouldn't be seen if the useEffect redirect works, but it's good practice
+      // This shouldn't be seen if the useEffect redirect works, but it's good practice
     return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><p>Please <a href="/login" className="text-blue-600">login</a>.</p></div>;
   }
 
   // Main dashboard content
   return (
-    <div className="min-h-screen bg-gray-100 p-8">
+    <Sidebar>
+    <div className="w-full">
       <div className="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-md">
         
-        <div className="flex justify-between items-center mb-4">
+        <div className="mb-4">
           <h1 className="text-3xl font-bold text-gray-900">
             Welcome, {userInfo?.name || 'User'}!
           </h1>
-          <a
-            href={`${API}/logout`}
-            className="px-4 py-2 bg-red-600 text-white font-semibold rounded-md shadow-sm hover:bg-red-500"
-          >
-            Logout
-          </a>
         </div>
-        <p className="text-gray-600 mb-6">Email: {userInfo?.email}</p>
 
         <hr className="my-6" />
 
@@ -192,15 +230,53 @@ export default function DashboardPage() {
             <p className="text-gray-600 mb-4">
               Your linked Chess.com account: <strong className="text-gray-900">{userInfo.chess_com_username}</strong>
             </p>
+            
+            {/* ⭐️ NEW: Date Range Selectors */}
+            <div className="mb-4 p-4 border border-gray-200 rounded-md">
+                <h3 className="text-lg font-medium mb-3">Select Game Date Range</h3>
+                <div className="flex space-x-4">
+                    <div className="flex-1">
+                        <label htmlFor="start-month" className="block text-sm font-medium text-gray-700">
+                            Start Month/Year
+                        </label>
+                        <select
+                            id="start-month"
+                            value={startMonthYear}
+                            onChange={(e) => setStartMonthYear(e.target.value)}
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2"
+                        >
+                            {monthYearOptions.map(my => (
+                                <option key={my} value={my}>{my}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="flex-1">
+                        <label htmlFor="end-month" className="block text-sm font-medium text-gray-700">
+                            End Month/Year
+                        </label>
+                        <select
+                            id="end-month"
+                            value={endMonthYear}
+                            onChange={(e) => setEndMonthYear(e.target.value)}
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2"
+                        >
+                            {monthYearOptions.map(my => (
+                                <option key={my} value={my}>{my}</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
             <p className="text-gray-600 mb-4">
-              Click the button below to fetch and analyze your latest games. (This will analyze the first game from 2023 for now).
+              Click the button below to fetch and analyze your games within the selected range.
             </p>
             <button
               onClick={handleAnalyze}
               disabled={analysisLoading}
               className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-500 disabled:bg-gray-400"
             >
-              {analysisLoading ? 'Analyzing...' : 'Analyze My Games'}
+              {analysisLoading ? 'Analyzing...' : 'Analyze Selected Games'}
             </button>
             <p className="text-sm text-gray-500 mt-2">
               Want to analyze a different account? You can change your linked account on your Profile page (coming soon).
@@ -227,5 +303,6 @@ export default function DashboardPage() {
 
       </div>
     </div>
+    </Sidebar>
   );
 }
